@@ -1,0 +1,49 @@
+.box {
+	margin: auto;
+	width: 40%;
+	border: 3px solid green;
+	padding: 10px;
+}
+
+.box_controls_info {
+	display: block;
+	width: 95%;
+	margin: 0 auto;
+	font-size: 10px;
+}
+
+.box_input {
+	display: block;
+	width: 95%;
+	margin: 0 auto;
+}
+
+.box_text {
+	white-space: normal;
+	display: block;
+	width: 95%;
+	padding-bottom: 30px;
+	margin: 0 auto;
+	/*font: normal 80% "Lucida Sans Unicode", sans-serif;*/
+	font: "Arial", serif;
+	font-size: 0px;
+}
+
+.current {
+	text-decoration: underline;
+	text-decoration-skip-ink: none;
+}
+
+.valid {
+	color: #99cc00;
+}
+
+.invalid {
+	color: #803333;
+	background-color: #f0a3a3;
+}
+
+span {
+	white-space: pre-wrap;
+	font-size: 18px;
+}
