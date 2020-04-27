@@ -1,4 +1,10 @@
+#[macro_use]
+extern crate diesel;
+
 use std::time::{Duration, Instant};
+use std::env;
+use std::io::ErrorKind;
+use std::io::Error as SIError;
 
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
@@ -7,57 +13,55 @@ use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServ
 use actix_web_actors::ws;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Result as SJResult;
 
-use rand::Rng;
+use diesel::sqlite::SqliteConnection;
+mod db;
 
-/// How often heartbeat pings are sent
+
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-/// How long before lack of client response causes a timeout
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// do websocket handshake and start `MyWebSocket` actor
 async fn ws_index(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     println!("{:?}", r);
     let res = ws::start(MyWebSocket::new(), &r, stream);
-    println!("{:?}", res);
     res
 }
 
-const texts : [&str; 5] = [
-    "CSS (Cascading Style Sheets) is used to style and lay out web pages — for example, to alter the font, color, size, and spacing of your content, split it into multiple columns, or add animations and other decorative features. This module provides a gentle beginning to your path towards CSS mastery with the basics of how it works, what the syntax looks like, and how you can start using it to add styling to HTML.",
-    "This module carries on where CSS first steps left off — now you've gained familiarity with the language and its syntax, and got some basic experience with using it, its time to dive a bit deeper. This module looks at the cascade and inheritance, all the selector types we have available, units, sizing, styling backgrounds and borders, debugging, and lots more.",
-    "The aim here is to provide you with a toolkit for writing competent CSS and help you understand all the essential theory, before moving on to more specific disciplines like text styling and CSS layout.",
-    "With the basics of the CSS language covered, the next CSS topic for you to concentrate on is styling text — one of the most common things you'll do with CSS. Here we look at text styling fundamentals, including setting font, boldness, italics, line and letter spacing, drop shadows and other text features. We round off the module by looking at applying custom fonts to your page, and styling lists and links.",
-    "At this point we've already looked at CSS fundamentals, how to style text, and how to style and manipulate the boxes that your content sits inside. Now it's time to look at how to place your boxes in the right place in relation to the viewport, and one another. We have covered the necessary prerequisites so we can now dive deep into CSS layout, looking at different display settings, modern layout tools like flexbox, CSS grid, and positioning, and some of the legacy techniques you might still want to know about.",
-];
-
-/// websocket connection is long running connection, it easier
-/// to handle with an actor
 struct MyWebSocket {
-    /// Client must send ping at least once per 10 seconds (CLIENT_TIMEOUT),
-    /// otherwise we drop connection.
     hb: Instant,
+
+    dbconn: SqliteConnection,
+    input_buffer: Vec<InputChange>,
+    text_id: i32,
+    text_len: i32,
 }
 
 impl Actor for MyWebSocket {
     type Context = ws::WebsocketContext<Self>;
 
-    /// Method is called on actor start. We start the heartbeat process here.
     fn started(&mut self, ctx: &mut Self::Context) {
         self.hb(ctx);
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct WsData {
     #[serde(rename = "type")]
     typ: String,
 
     text: Option<String>,
+    data: Option<String>,
+    change: Option<String>,
+    ts: Option<i64>,
 }
 
-/// Handler for `ws::Message`
+#[derive(Serialize, Deserialize, Debug)]
+struct InputChange {
+    data: Option<String>,
+    change: String,
+    ts: i64,
+}
+
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
     fn handle(
         &mut self,
@@ -73,8 +77,6 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                 self.hb = Instant::now();
             }
             Ok(ws::Message::Text(text)) => {
-                println!("matched as text: {}", text);
-
                 let data : WsData = match serde_json::from_str(&text) {
                     Ok(data) => data,
                     Err(err) => {
@@ -86,12 +88,81 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                 let mut resp = WsData {
                     typ: "Unknown".to_owned(), 
                     text: None,
+                    data: None,
+                    change: None,
+                    ts: None,
                 };
+
+
                 match data.typ.as_ref() {
                     "refresh" => {
-                        resp.typ = "text".to_owned();
-                        resp.text = Some(texts[rand::thread_rng().gen_range(0, 5)].to_string());
+                        match db::get_random_typing_text(&self.dbconn) {
+                            Ok(nt) => {
+                                resp.typ = "text".to_owned();
+                                self.text_id = nt.id;
+                                self.text_len = nt.text.len() as i32;
+                                resp.text = Some(nt.text);
+                                self.input_buffer.clear();
+                            },
+                            Err(e) => {
+                                eprintln!("get_random_typing_text error occured: {:?}", e);
+                                return;
+                            }
+                        };
                     },
+                    "change" => {
+                        let change = match data.change {
+                            Some(c) => c,
+                            None => {
+                                println!("Change object missing change!");
+                                return;
+                            },
+                        };
+                        
+                        let ts = match data.ts {
+                            Some(t) => t,
+                            None => {
+                                println!("Timestamp object missing change!");
+                                return;
+                            },
+                        };
+
+                        let inputchg = InputChange {
+                            data: data.data,
+                            change: change,
+                            ts: ts,
+                        };
+                        self.input_buffer.push(inputchg);
+
+                        return;
+                    },
+                    "done" => {
+                        println!("Done!\nTook {:?} tm units.", data.ts);
+                        println!("Serializing...");
+                        let s_session = match serde_json::to_string(&self.input_buffer) {
+                            Ok(s) => s,
+                            Err(err) => {
+                                eprintln!("serde_json to_string error: {}", err);
+                                return;
+                            }
+                        };
+
+                        let session = db::models::NewTypingSession {
+                            inputs: s_session,
+                            wpm: 0,
+                            wpm80: 0,
+                            parent: self.text_id,
+                        };
+                        match db::create_typing_session(&self.dbconn, &session) {
+                            Ok(x) => {
+                                println!("Session save OK, id: {}", x.id);
+                            },
+                            Err(e) => {
+                                eprintln!("Session save ERR: {:?}", e);
+                            }
+                        };
+                        return;
+                    }
                     _ => {
                         println!("Handler for type {} not yet implemented!", data.typ);
                         return;
@@ -119,23 +190,14 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
 
 impl MyWebSocket {
     fn new() -> Self {
-        Self { hb: Instant::now() }
+        Self { hb: Instant::now(), dbconn: db::establish_connection(), input_buffer: Vec::new(), text_id: -1, text_len: -1 }
     }
 
-    /// helper method that sends ping to client every second.
-    ///
-    /// also this method checks heartbeats from client
     fn hb(&self, ctx: &mut <Self as Actor>::Context) {
         ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            // check client heartbeats
             if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
-                // heartbeat timed out
                 println!("Websocket Client heartbeat failed, disconnecting!");
-
-                // stop actor
                 ctx.stop();
-
-                // don't try to send a ping
                 return;
             }
 
@@ -149,17 +211,33 @@ async fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "actix_server=info,actix_web=info");
     env_logger::init();
 
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "text" => {
+                println!("len: {}", args.len());
+                if args.len() != 3 {
+                    println!("Invalid syntax! Should be: ./typeracer text text_to_add");
+                    return Err(SIError::new(ErrorKind::Other, ""));
+                }
+                let dbc = db::establish_connection();
+                if db::create_typing_text(&dbc, args[2].clone()) != 1 {
+                    println!("Failed adding new text!");
+                    return Err(SIError::new(ErrorKind::Other, ""));
+                } else {
+                    println!("Text added successfuly!");
+                    return Ok(());
+                }
+            },
+            _ => {
+                println!("No valid arguments found, skipping!");
+            },
+        };
+    }
+
     HttpServer::new(|| {
-        App::new()
-            // enable logger
-            .wrap(middleware::Logger::default())
-            // websocket route
-            .service(web::resource("/ws/").route(web::get().to(ws_index)))
-            // static files
-            .service(fs::Files::new("/", "static/").index_file("index.html"))
-    })
-    // start http server on 127.0.0.1:8080
-    .bind("0.0.0.0:8080")?
-    .run()
-    .await
+        App::new().wrap(middleware::Logger::default())
+                  .service(web::resource("/ws/").route(web::get().to(ws_index)))
+                  .service(fs::Files::new("/", "static/").index_file("index.html"))
+    }).bind("0.0.0.0:8080")?.run().await
 }
