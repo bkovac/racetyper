@@ -62,6 +62,11 @@ struct InputChange {
     ts: i64,
 }
 
+fn calculate_wpm(chars: i32, millis: i64) -> i32 {
+    let calc_wpm = ((chars as f64) / 5.0_f64) * (60.0_f64 / ((millis as f64 / 1000.0_f64)));
+    return calc_wpm.round() as i32
+}
+
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
     fn handle(
         &mut self,
@@ -146,10 +151,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                                 return;
                             }
                         };
-
                         let session = db::models::NewTypingSession {
                             inputs: s_session,
-                            wpm: 0,
+                            wpm: calculate_wpm(self.text_len, self.input_buffer.last().unwrap().ts),
                             wpm80: 0,
                             parent: self.text_id,
                         };
