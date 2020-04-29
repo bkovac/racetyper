@@ -87,6 +87,7 @@ window.addEventListener('load', function() {
 		timer = null;
 
 		ih(preLeft, sentence);
+		ih(preValid, "");
 		ih(preCurrentValid, "");
 		ih(preCurrentInvalid, "");
 		ih(preInvalid, "");
