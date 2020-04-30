@@ -92,6 +92,7 @@ window.addEventListener('load', function() {
 		ih(preCurrentInvalid, "");
 		ih(preInvalid, "");
 		ih(preCurrent, "");
+		ih(infoSpeed, "- WPM");
 
 		textInputBox.value = "";
 	}

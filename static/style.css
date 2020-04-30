@@ -35,15 +35,20 @@
 }
 
 .valid {
-	color: #99cc00;
+	/*color: #99cc00;*/
+	color: #00916E;
 }
 
 .invalid {
-	color: #803333;
+	/*color: #803333;*/
+	color: #DF2935;
 	background-color: #f0a3a3;
 }
 
 span {
 	white-space: pre-wrap;
 	font-size: 20px;
+	color: #271F30;
+	margin: 0;
+	padding: 0;
 }
