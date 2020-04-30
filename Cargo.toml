@@ -26,3 +26,4 @@ serde = { version = "1.0.106", features = ["derive"] }
 rand = "0.7"
 diesel = { version = "1.4.4", features = ["sqlite"] }
 dotenv = "0.15.0"
+csv = "1.1"

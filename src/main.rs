@@ -2,9 +2,6 @@
 extern crate diesel;
 
 use std::time::{Duration, Instant};
-use std::env;
-use std::io::ErrorKind;
-use std::io::Error as SIError;
 
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
@@ -16,6 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use diesel::sqlite::SqliteConnection;
 mod db;
+
+mod cmd;
 
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -215,29 +214,17 @@ async fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "actix_server=info,actix_web=info");
     env_logger::init();
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() > 1 {
-        match args[1].as_str() {
-            "text" => {
-                println!("len: {}", args.len());
-                if args.len() != 3 {
-                    println!("Invalid syntax! Should be: ./typeracer text text_to_add");
-                    return Err(SIError::new(ErrorKind::Other, ""));
-                }
-                let dbc = db::establish_connection();
-                if db::create_typing_text(&dbc, args[2].clone()) != 1 {
-                    println!("Failed adding new text!");
-                    return Err(SIError::new(ErrorKind::Other, ""));
-                } else {
-                    println!("Text added successfuly!");
-                    return Ok(());
-                }
-            },
-            _ => {
-                println!("No valid arguments found, skipping!");
-            },
-        };
-    }
+    match cmd::parse_cmdline().await {
+        Ok(flag) => {
+            if flag {
+                return Ok(());
+            }
+            //else just continue
+        },
+        Err(e) => {
+            return Err(e);
+        },
+    };
 
     HttpServer::new(|| {
         App::new().wrap(middleware::Logger::default())

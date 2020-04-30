@@ -12,17 +12,25 @@ use self::models::{TypingSession, NewTypingSession, TypingText, NewTypingText};
 
 type Result<T> = std::result::Result<T, DBError>;
 
+
+
 #[derive(Debug, Clone)]
-pub struct DBError {
+pub struct DBErrorDefault {
     text: String,
 }
 
-impl fmt::Display for DBError {
+#[derive(Debug)]
+pub enum DBError {
+    DieselError(diesel::result::Error),
+    Default(DBErrorDefault),
+}
+
+impl fmt::Display for DBErrorDefault {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Database Error: {}", self.text)
     }
 }
-impl error::Error for DBError {
+impl error::Error for DBErrorDefault {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         None
     }
@@ -31,7 +39,7 @@ impl error::Error for DBError {
 impl From<diesel::result::Error> for DBError {
     //TODO: return the actual error
     fn from(_error: diesel::result::Error) -> Self {
-        DBError {text: "wrapped unknown diesel error".to_owned()}
+        DBError::Default(DBErrorDefault{text: "wrapped unknown diesel error".to_owned()})
     }
 }
 
@@ -48,41 +56,50 @@ pub fn create_typing_session(conn: &SqliteConnection, session: &NewTypingSession
     use schema::typing_sessions::dsl::*;
 
     return conn.transaction::<TypingSession, DBError, _>(|| {
+        /*
         match diesel::insert_into(typing_sessions).values(session).execute(conn) {
             Ok(inserted_count) => {
                 if inserted_count != 1 {
-                    return Err(DBError{text: format!("Invalid number of inserted values: {}", inserted_count)});
+                    return Err(DBError::Default(DBErrorDefault{text: format!("Invalid number of inserted values: {}", inserted_count)}));
                 }
                 //Pass
             },
             Err(_e) => {
-                return Err(DBError{text: "insert_into error".to_owned()});
+                return Err(DBError::Default(DBErrorDefault{text: "insert_into error".to_owned()}));
             }
         }
-
+        */
+        let inserted_count =  diesel::insert_into(typing_sessions).values(session).execute(conn)?;
+        if inserted_count != 1 {
+            return Err(DBError::Default(DBErrorDefault{text: format!("Invalid number of inserted values: {}", inserted_count)}));
+        }
+        /*
         let rows = match typing_sessions.order(id.desc()).limit(1).load::<TypingSession>(conn) {
             Ok(rows) => rows,
-            Err(_e) => {
-                return Err(DBError{text: "load error".to_owned()});
+            Err(e) => {
+                return e;
             },
         };
+        */
+        let rows = typing_sessions.order(id.desc()).limit(1).load::<TypingSession>(conn)?;
 
         if rows.len() != 1 {
-            return Err(DBError{text: format!("Invalid number of rows in result: {}", rows.len())});
+            return Err(DBError::Default(DBErrorDefault{text: format!("Invalid number of rows in result: {}", rows.len())}));
         } else {
             return Ok(rows[0].clone());
         }
     });
 }
 
-pub fn create_typing_text(conn: &SqliteConnection, text: String) -> usize {
+pub fn create_typing_text(conn: &SqliteConnection, text: String) -> Result<usize> {
     use schema::typing_texts;
 
     let new_typing_text = NewTypingText {
         text: text,
     };
 
-    diesel::insert_into(typing_texts::table).values(&new_typing_text).execute(conn).expect("Error saving typing text")
+    let sz = diesel::insert_into(typing_texts::table).values(&new_typing_text).execute(conn)?;
+    Ok(sz)
 }
 
 pub fn get_random_typing_text(conn: &SqliteConnection) -> Result<TypingText> {
@@ -94,6 +111,6 @@ pub fn get_random_typing_text(conn: &SqliteConnection) -> Result<TypingText> {
     if res.len() == 1 {
         Ok(res[0].clone())
     } else {
-        Err(DBError{text: format!("Invalid number of entries for query: {}", res.len())})
+        Err(DBError::Default(DBErrorDefault{text: format!("Invalid number of entries for query: {}", res.len())}))
     }
 }
