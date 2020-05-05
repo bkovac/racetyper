@@ -114,3 +114,9 @@ pub fn get_random_typing_text(conn: &SqliteConnection) -> Result<TypingText> {
         Err(DBError::Default(DBErrorDefault{text: format!("Invalid number of entries for query: {}", res.len())}))
     }
 }
+
+pub fn get_typing_text_with_id(conn: &SqliteConnection, id: i32) -> Result<TypingText> {
+    use schema::typing_texts;
+    let res = typing_texts::table.filter(typing_texts::id.eq(id)).first::<TypingText>(conn)?;
+    Ok(res)
+}

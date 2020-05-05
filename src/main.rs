@@ -2,6 +2,7 @@
 extern crate diesel;
 
 use std::time::{Duration, Instant};
+use std::iter::Iterator;
 
 use actix::prelude::*;
 use actix::{Actor, StreamHandler};
@@ -32,7 +33,6 @@ struct MyWebSocket {
     dbconn: SqliteConnection,
     input_buffer: Vec<InputChange>,
     text_id: i32,
-    text_len: i32,
 }
 
 impl Actor for MyWebSocket {
@@ -64,6 +64,104 @@ struct InputChange {
 fn calculate_wpm(chars: i32, millis: i64) -> i32 {
     let calc_wpm = ((chars as f64) / 5.0_f64) * (60.0_f64 / ((millis as f64 / 1000.0_f64)));
     return calc_wpm.round() as i32
+}
+
+#[derive(Debug)]
+struct MinimumNode {
+    text: String,
+    time: i64,
+}
+
+fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
+    println!("len: {}", ics.len());
+    println!("segment len: {}", ics.len()/nosplits);
+    let nspaces : Vec<&str> = txt.split(' ').collect();
+    println!("nospaces: {}", nspaces.len());
+
+    if nspaces.len() < nosplits {
+        println!("nspaces < nosplits");
+        return;
+    }
+    let divider_f = nspaces.len() as f64 / nosplits as f64;
+    let mut remainder = 0;
+    if divider_f.fract() != 0.0 {
+        remainder = nspaces.len() % nosplits;
+    }
+    let divider = divider_f.round() as usize;
+
+    println!("text is: {}", txt);
+
+    let mut nodes = Vec::<MinimumNode>::new();
+
+    let mut tmpw = Vec::<&str>::with_capacity(divider);
+    let mut splcnt = 0;
+    for word in &nspaces {
+        if splcnt == divider {
+            let x = MinimumNode{text: tmpw.join(" "), time: -1};
+            nodes.push(x);
+            tmpw.clear();
+            splcnt = 0;
+        }
+        tmpw.push(word);
+        splcnt += 1;
+    }
+    if remainder > 0 {
+        let x = MinimumNode{text: tmpw.join(" "), time: -1};
+        nodes.push(x);
+    }
+
+    println!("nodes: {:?}", nodes);
+
+    let mut tmp_cw = String::new();
+    let mut tmp_cw_start : i64 = 0;
+    let mut fw_iter = nodes.iter_mut();
+    let mut fw_iter_c = fw_iter.next().unwrap();
+    for ic in ics {
+        match ic.change.as_str() {
+            "insertText" => {
+                match &ic.data {
+                    Some(k) => {
+                        if k == " " || k == "\0" {
+                            if fw_iter_c.text == tmp_cw {
+                                let delta = ic.ts - tmp_cw_start;
+                                fw_iter_c.time = delta;
+                                if k == "\0" {
+                                    break;
+                                }
+
+                                tmp_cw_start = ic.ts;
+                                fw_iter_c = fw_iter.next().unwrap();
+                                tmp_cw.clear();
+                            } else {
+                                tmp_cw += k;
+                            }
+                        } else {
+                            tmp_cw += k;
+                        }
+                    },
+                    None => {
+                        println!("Malformed insertText");
+                    },
+                };
+            },
+            "deleteContentBackward" => {
+                match ic.data {
+                    Some(_) => {
+                        println!("Malformed deleteContentBackward");
+                    },
+                    None => {
+                        tmp_cw.pop();
+                    },
+                };
+            },
+            _ => (),
+        };
+        //println!("tmp_cw = {}", tmp_cw);
+    }
+
+    for mde in nodes {
+        println!("wpm for text: '{}' is: {}", mde.text, (60.0_f64 * (mde.text.len() as f64) / 5.0_f64) / (mde.time as f64 / 1000.0_f64));
+    }
 }
 
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
@@ -104,7 +202,6 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                             Ok(nt) => {
                                 resp.typ = "text".to_owned();
                                 self.text_id = nt.id;
-                                self.text_len = nt.text.len() as i32;
                                 resp.text = Some(nt.text);
                                 self.input_buffer.clear();
                             },
@@ -142,7 +239,16 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                     },
                     "done" => {
                         println!("Done!\nTook {:?} tm units.", data.ts);
-                        println!("Serializing...");
+                        self.input_buffer.push(InputChange{change: "insertText".to_string(), data: Some("\0".to_string()), ts: data.ts.unwrap()});
+                        let rel_text = match db::get_typing_text_with_id(&self.dbconn, self.text_id) {
+                            Ok(txt) => txt,
+                            Err(err) => {
+                                eprintln!("db get_typing_text_with_id error: {:?}", err);
+                                return;
+                            },
+                        };
+                        analyze_speed(&self.input_buffer, &rel_text.text, 10);
+
                         let s_session = match serde_json::to_string(&self.input_buffer) {
                             Ok(s) => s,
                             Err(err) => {
@@ -152,7 +258,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                         };
                         let session = db::models::NewTypingSession {
                             inputs: s_session,
-                            wpm: calculate_wpm(self.text_len, self.input_buffer.last().unwrap().ts),
+                            wpm: calculate_wpm(rel_text.text.len() as i32, self.input_buffer.last().unwrap().ts),
                             wpm80: 0,
                             parent: self.text_id,
                         };
@@ -193,7 +299,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
 
 impl MyWebSocket {
     fn new() -> Self {
-        Self { hb: Instant::now(), dbconn: db::establish_connection(), input_buffer: Vec::new(), text_id: -1, text_len: -1 }
+        Self { hb: Instant::now(), dbconn: db::establish_connection(), input_buffer: Vec::new(), text_id: -1 }
     }
 
     fn hb(&self, ctx: &mut <Self as Actor>::Context) {
