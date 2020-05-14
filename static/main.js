@@ -34,6 +34,9 @@ window.addEventListener('load', function() {
 				*/
 				break;
 			}
+			case "graph": {
+				makeGraph(obj.points);
+			}
 		}
 	};
 	conn.onclose = function() {
@@ -64,7 +67,7 @@ window.addEventListener('load', function() {
 		}
 
 		var delta = (Date.now() - timer) / 1000.0;
-		var wpm = Math.round((validEntered.length/5.0) * (60.0/delta));
+		var wpm = Math.round(((preValid.innerHTML.length + preCurrentValid.innerHTML.length)/5.0) * (60.0/delta));
 
 		ih(infoSpeed, wpm + " WPM");
 	}, 500);
@@ -190,7 +193,7 @@ window.addEventListener('load', function() {
 			if (wsReady(conn)) {
 				conn.send(JSON.stringify({type: "done", ts: delta}));
 			}
-			location.reload();
+			//location.reload();
 		}
 	});
 
@@ -198,3 +201,12 @@ window.addEventListener('load', function() {
 
 });
 
+function makeGraph(points) {
+	for (var i = 0; i < points.length; i++) {
+		var child = document.createElement("div");
+		child.classList.add("graph_column");
+		child.innerHTML = "&nbsp;";
+		child.setAttribute("style", "height: " + points[i].rel + "%");
+		document.getElementById("graph_wpms").appendChild(child);
+	}
+}

@@ -52,6 +52,7 @@ struct WsData {
     data: Option<String>,
     change: Option<String>,
     ts: Option<i64>,
+    points: Option<Vec<MinimumNode>>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -66,13 +67,16 @@ fn calculate_wpm(chars: i32, millis: i64) -> i32 {
     return calc_wpm.round() as i32
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct MinimumNode {
     text: String,
+    nomistakes: i64,
     time: i64,
+    wpm: i64,
+    rel: u64,
 }
 
-fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
+fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) -> Result<Vec<MinimumNode>, ()>{
     println!("len: {}", ics.len());
     println!("segment len: {}", ics.len()/nosplits);
     let nspaces : Vec<&str> = txt.split(' ').collect();
@@ -80,7 +84,7 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
 
     if nspaces.len() < nosplits {
         println!("nspaces < nosplits");
-        return;
+        return Err(());
     }
     let divider_f = nspaces.len() as f64 / nosplits as f64;
     let mut remainder = 0;
@@ -97,7 +101,7 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
     let mut splcnt = 0;
     for word in &nspaces {
         if splcnt == divider {
-            let x = MinimumNode{text: tmpw.join(" "), time: -1};
+            let x = MinimumNode{text: tmpw.join(" "), time: -1, nomistakes: -1, wpm: -1, rel: 0};
             nodes.push(x);
             tmpw.clear();
             splcnt = 0;
@@ -106,7 +110,7 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
         splcnt += 1;
     }
     if remainder > 0 {
-        let x = MinimumNode{text: tmpw.join(" "), time: -1};
+        let x = MinimumNode{text: tmpw.join(" "), time: -1, nomistakes: -1, wpm: -1, rel: 0};
         nodes.push(x);
     }
 
@@ -116,15 +120,18 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
     let mut tmp_cw_start : i64 = 0;
     let mut fw_iter = nodes.iter_mut();
     let mut fw_iter_c = fw_iter.next().unwrap();
+    let mut num_entered = 0;
     for ic in ics {
         match ic.change.as_str() {
             "insertText" => {
                 match &ic.data {
                     Some(k) => {
+                        num_entered += k.len();
                         if k == " " || k == "\0" {
                             if fw_iter_c.text == tmp_cw {
                                 let delta = ic.ts - tmp_cw_start;
                                 fw_iter_c.time = delta;
+                                fw_iter_c.nomistakes = (num_entered - tmp_cw.len()) as i64;
                                 if k == "\0" {
                                     break;
                                 }
@@ -132,6 +139,7 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
                                 tmp_cw_start = ic.ts;
                                 fw_iter_c = fw_iter.next().unwrap();
                                 tmp_cw.clear();
+                                num_entered = 0;
                             } else {
                                 tmp_cw += k;
                             }
@@ -151,17 +159,23 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) {
                     },
                     None => {
                         tmp_cw.pop();
+                        num_entered += 1;
                     },
                 };
             },
             _ => (),
         };
-        //println!("tmp_cw = {}", tmp_cw);
     }
 
-    for mde in nodes {
-        println!("wpm for text: '{}' is: {}", mde.text, (60.0_f64 * (mde.text.len() as f64) / 5.0_f64) / (mde.time as f64 / 1000.0_f64));
+    let line_height: f64 = 75.0;
+    let line_wpm: f64 = 100.0;
+    for mut mde in &mut nodes {
+        mde.wpm = ((60.0_f64 * (mde.text.len() as f64) / 5.0_f64) / (mde.time as f64 / 1000.0_f64)).round() as i64;
+        mde.rel = ((line_height / line_wpm) * mde.wpm as f64).round() as u64;
+        println!("wpm for text: '{}' is: {} with {} mistakes at rel: {}", mde.text, mde.wpm, mde.nomistakes, mde.rel);
     }
+
+    Ok(nodes)
 }
 
 impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
@@ -193,6 +207,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                     data: None,
                     change: None,
                     ts: None,
+                    points: None,
                 };
 
 
@@ -239,7 +254,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                     },
                     "done" => {
                         println!("Done!\nTook {:?} tm units.", data.ts);
-                        self.input_buffer.push(InputChange{change: "insertText".to_string(), data: Some("\0".to_string()), ts: data.ts.unwrap()});
+                        self.input_buffer.push(InputChange{change: "insertText".to_string(), data: Some("\0".to_string()), ts: self.input_buffer.last().unwrap().ts});
                         let rel_text = match db::get_typing_text_with_id(&self.dbconn, self.text_id) {
                             Ok(txt) => txt,
                             Err(err) => {
@@ -247,7 +262,16 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                                 return;
                             },
                         };
-                        analyze_speed(&self.input_buffer, &rel_text.text, 10);
+                        match analyze_speed(&self.input_buffer, &rel_text.text, 20) {
+                            Err(_) => {
+                                println!("analyze_speed error");
+                                return;
+                            },
+                            Ok(nodes) => {
+                                resp.points = Some(nodes);
+                                resp.typ = "graph".to_string();
+                            },
+                        };
 
                         let s_session = match serde_json::to_string(&self.input_buffer) {
                             Ok(s) => s,
@@ -270,7 +294,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                                 eprintln!("Session save ERR: {:?}", e);
                             }
                         };
-                        return;
+                        //return;
                     }
                     _ => {
                         println!("Handler for type {} not yet implemented!", data.typ);
