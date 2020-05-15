@@ -76,31 +76,33 @@ struct MinimumNode {
     rel: u64,
 }
 
-fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) -> Result<Vec<MinimumNode>, ()>{
+fn analyze_speed(ics: &Vec<InputChange>, txt: &String, wordspersplit: usize) -> Result<Vec<MinimumNode>, ()>{
     println!("len: {}", ics.len());
-    println!("segment len: {}", ics.len()/nosplits);
     let nspaces : Vec<&str> = txt.split(' ').collect();
     println!("nospaces: {}", nspaces.len());
 
-    if nspaces.len() < nosplits {
-        println!("nspaces < nosplits");
+    if nspaces.len() < wordspersplit {
+        println!("nspaces < wordspersplit");
         return Err(());
     }
+    /*
     let divider_f = nspaces.len() as f64 / nosplits as f64;
     let mut remainder = 0;
     if divider_f.fract() != 0.0 {
-        remainder = nspaces.len() % nosplits;
     }
     let divider = divider_f.round() as usize;
 
     println!("text is: {}", txt);
+    */
 
     let mut nodes = Vec::<MinimumNode>::new();
 
-    let mut tmpw = Vec::<&str>::with_capacity(divider);
+    let remainder = nspaces.len() % wordspersplit;
+    println!("remainder: {}", remainder);
+    let mut tmpw = Vec::<&str>::new();
     let mut splcnt = 0;
     for word in &nspaces {
-        if splcnt == divider {
+        if splcnt == wordspersplit {
             let x = MinimumNode{text: tmpw.join(" "), time: -1, nomistakes: -1, wpm: -1, rel: 0};
             nodes.push(x);
             tmpw.clear();
@@ -115,6 +117,7 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) -> Resul
     }
 
     println!("nodes: {:?}", nodes);
+    println!("initial nonodes: {:?}", nodes.len());
 
     let mut tmp_cw = String::new();
     let mut tmp_cw_start : i64 = 0;
@@ -174,7 +177,8 @@ fn analyze_speed(ics: &Vec<InputChange>, txt: &String, nosplits: usize) -> Resul
         mde.rel = ((line_height / line_wpm) * mde.wpm as f64).round() as u64;
         println!("wpm for text: '{}' is: {} with {} mistakes at rel: {}", mde.text, mde.wpm, mde.nomistakes, mde.rel);
     }
-
+    
+    println!("nonodes: {}", nodes.len());
     Ok(nodes)
 }
 
@@ -262,7 +266,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MyWebSocket {
                                 return;
                             },
                         };
-                        match analyze_speed(&self.input_buffer, &rel_text.text, 20) {
+                        match analyze_speed(&self.input_buffer, &rel_text.text, 3) {
                             Err(_) => {
                                 println!("analyze_speed error");
                                 return;

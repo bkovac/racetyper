@@ -190,6 +190,7 @@ window.addEventListener('load', function() {
 		//console.log(validEntered + currentInput);
 		if ((validEntered + currentInput) == sentence) {
 			console.log("done!");
+			timer = null;
 			if (wsReady(conn)) {
 				conn.send(JSON.stringify({type: "done", ts: delta}));
 			}
